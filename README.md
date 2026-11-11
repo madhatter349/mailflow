@@ -46,3 +46,18 @@ The Coolify app pulls `docker-compose.yaml` from this repo, with
 `docker_compose_domains` naming the `frontend` service. Redeploying is a push.
 Back up the `postgres_data` volume and keep `ENCRYPTION_KEY`: together they are
 the only copy of the mailbox credentials and cached mail.
+
+## Universal login (environment-managed)
+
+The `admin-bootstrap` service runs once per deploy, after the backend is
+healthy, and makes the environment the source of truth for the single login:
+
+| Variable | Effect |
+|---|---|
+| `MAILFLOW_ADMIN_USER` | The one login that owns every connected mailbox |
+| `MAILFLOW_ADMIN_PASSWORD` | Its password. Re-hashed and upserted on every deploy, so rotating the env var rotates the login |
+| `MAILFLOW_ADMIN_THEME` | UI theme forced for that user (default `light`) |
+
+Nothing here is a secret in the repo: the values live in Coolify's env store.
+Because the password is re-applied from the environment on boot, changing it in
+the UI is temporary by design — change the env var instead.

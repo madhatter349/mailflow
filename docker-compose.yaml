@@ -90,6 +90,88 @@ services:
       retries: 5
       start_period: 10s
 
+  # Runs once per deploy (after the backend is healthy, so migrations have run):
+  # makes the environment the source of truth for the admin password.
+  admin-bootstrap:
+    image: ghcr.io/maathimself/mailflow-backend:4.3.1
+    restart: "no"
+    command: ["node", "/app/bootstrap-admin.mjs"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: mailflow
+      DB_USER: mailflow
+      DB_PASSWORD: ${DB_PASSWORD}
+      ADMIN_USER: ${MAILFLOW_ADMIN_USER}
+      ADMIN_PASSWORD: ${MAILFLOW_ADMIN_PASSWORD}
+      ADMIN_THEME: ${MAILFLOW_ADMIN_THEME:-light}
+    configs:
+      - source: admin_bootstrap
+        target: /app/bootstrap-admin.mjs
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
+
+# The admin bootstrap script is inlined: Coolify deploys the compose content,
+# not a working tree, so relative bind mounts would arrive empty.
+configs:
+  admin_bootstrap:
+    content: |
+      import pg from 'pg';
+      import bcrypt from 'bcryptjs';
+
+      const user = (process.env.ADMIN_USER || '').trim();
+      const pass = process.env.ADMIN_PASSWORD || '';
+      const theme = (process.env.ADMIN_THEME || '').trim();
+      if (!user || !pass) {
+        console.log('[bootstrap] ADMIN_USER/ADMIN_PASSWORD unset - nothing to do');
+        process.exit(0);
+      }
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const client = new pg.Client({
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT || 5432),
+        database: process.env.DB_NAME,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+      });
+      await client.connect();
+
+      let ready = false;
+      for (let i = 0; i < 30 && !ready; i++) {
+        try {
+          const r = await client.query("select to_regclass('public.users') as t");
+          ready = Boolean(r.rows[0]?.t);
+        } catch {}
+        if (!ready) await sleep(2000);
+      }
+      if (!ready) {
+        console.error('[bootstrap] users table never appeared');
+        process.exit(1);
+      }
+
+      const hash = await bcrypt.hash(pass, 12);
+      const prefs = theme ? JSON.stringify({ theme }) : null;
+      const existing = await client.query('select id from users where username = $$1', [user]);
+      if (existing.rowCount) {
+        await client.query('update users set password_hash = $$2 where username = $$1', [user, hash]);
+        if (prefs) {
+          await client.query(
+            "update users set preferences = coalesce(preferences,'{}'::jsonb) || $$2::jsonb where username = $$1",
+            [user, prefs],
+          );
+        }
+        console.log('[bootstrap] password synced from environment for ' + user);
+      } else {
+        await client.query(
+          'insert into users (username, password_hash, is_admin, ai_enabled, preferences) values ($$1,$$2,true,false,$$3::jsonb)',
+          [user, hash, prefs || '{}'],
+        );
+        console.log('[bootstrap] admin created from environment: ' + user);
+      }
+      await client.end();
