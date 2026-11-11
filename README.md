@@ -1,6 +1,29 @@
 # mailflow
 
-TODO(new-project): one paragraph on what this does and how it is deployed.
+MailFlow webmail for the 382972.xyz mailbox estate, deployed on the VPS by
+Coolify. Upstream: <https://github.com/maathimself/mailflow> (AGPL-3.0).
+
+Frontend + backend + Postgres + Redis, all from pinned upstream images. Nothing
+publishes a host port: Traefik terminates TLS and routes to the `frontend`
+service on :80. Credentials for the mail servers are entered in the UI and are
+encrypted at rest with `ENCRYPTION_KEY`.
+
+## Required environment
+
+| Variable | Why |
+|---|---|
+| `APP_URL` | Public origin, e.g. `https://mail.382972.xyz` |
+| `SESSION_SECRET` | Signs session cookies |
+| `DB_PASSWORD` | Postgres password (app + database) |
+| `ENCRYPTION_KEY` | Encrypts stored IMAP/SMTP credentials. Losing it re-locks every connected mailbox. |
+| `TRUST_PROXY_HOPS` | Set to `1` behind Traefik so client IPs are read correctly |
+
+Generated once, stored in Coolify's env store, never in this repo:
+
+```sh
+openssl rand -hex 32   # SESSION_SECRET, ENCRYPTION_KEY
+openssl rand -hex 16   # DB_PASSWORD
+```
 
 ## How this project is built and run
 
@@ -19,13 +42,7 @@ TODO(new-project): one paragraph on what this does and how it is deployed.
 
 ## Deploying
 
-Push to `main`. Coolify builds the commit and swaps the container; the previous
-container keeps serving until the new one is healthy.
-
-## Conventions
-
-- `scripts/verify.sh` is the single source of truth for "is this good?".
-  Nothing else may be the only gate.
-- No `.github/workflows/`. If something must run on a schedule, it is a VPS
-  timer. If something must run on a push, it is a deploy or a `verify.sh` step.
-- Registered for nightly verification in `/opt/vps-ci/registry.tsv` on the VPS.
+The Coolify app pulls `docker-compose.yaml` from this repo, with
+`docker_compose_domains` naming the `frontend` service. Redeploying is a push.
+Back up the `postgres_data` volume and keep `ENCRYPTION_KEY`: together they are
+the only copy of the mailbox credentials and cached mail.

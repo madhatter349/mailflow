@@ -1,0 +1,90 @@
+# MailFlow — Coolify deployment.
+#
+# Nothing publishes a host port: Coolify's Traefik terminates TLS and reaches
+# the `frontend` service on :80. Postgres and Redis stay on the compose network.
+#
+# Secrets come from Coolify's env store, never from this file.
+
+services:
+  frontend:
+    image: ghcr.io/maathimself/mailflow-frontend:4.3.1
+    restart: unless-stopped
+    expose:
+      - "80"
+    environment:
+      # Traefik terminates TLS; the container serves plain HTTP on :80.
+      NGINX_TLS: "off"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO/dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  backend:
+    image: ghcr.io/maathimself/mailflow-backend:4.3.1
+    restart: unless-stopped
+    stop_grace_period: 30s
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SESSION_SECRET: ${SESSION_SECRET}
+      APP_URL: ${APP_URL}
+      FRONTEND_URL: ${APP_URL}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: mailflow
+      DB_USER: mailflow
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mailflow
+      POSTGRES_USER: mailflow
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailflow -d mailflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
