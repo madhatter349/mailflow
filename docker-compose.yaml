@@ -14,6 +14,11 @@ services:
     environment:
       # Traefik terminates TLS; the container serves plain HTTP on :80.
       NGINX_TLS: "off"
+    labels:
+      # Attach the file-provider headers middleware (HSTS) to the router Coolify
+      # generates. The router name embeds this app's uuid and the domain hash;
+      # both change only if the app is recreated or the domain moves.
+      traefik.http.routers.https-0-csqs2g7zjl68bbnvtjeanclf-frontend-aca3.middlewares: gzip-sse,mailflow-headers@file
     depends_on:
       backend:
         condition: service_healthy
